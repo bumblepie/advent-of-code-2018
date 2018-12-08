@@ -1,0 +1,8 @@
+[package]
+name = "part-1"
+version = "0.1.0"
+authors = ["bumblepie <luke@bumblepie.space>"]
+
+[dependencies]
+regex = "1"
+itertools = "0.7.11"
