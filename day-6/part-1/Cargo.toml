@@ -1,0 +1,9 @@
+[package]
+name = "part-1"
+version = "0.1.0"
+authors = ["bumblepie <luke@bumblepie.space>"]
+edition = "2018"
+
+[dependencies]
+regex = "1.1.0"
+lazy_static = "1.2.0"
