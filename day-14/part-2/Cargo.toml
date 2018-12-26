@@ -1,0 +1,18 @@
+[package]
+name = "part-1"
+version = "0.1.0"
+authors = ["bumblepie <luke@bumblepie.space>"]
+edition = "2018"
+
+[dependencies]
+
+[profile.release]
+debug = true
+lto = false
+
+[dev-dependencies]
+criterion = "0.2"
+
+[[bench]]
+name = "my_benchmark"
+harness = false

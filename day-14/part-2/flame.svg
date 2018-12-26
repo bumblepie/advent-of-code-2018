@@ -1,0 +1,1042 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1200" height="2134" onload="init(evt)" viewBox="0 0 1200 2134" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<!-- NOTES:  -->
+<defs >
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	.func_g:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	var details, searchbtn, matchedtxt, svg;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+	}
+
+	// mouse-over for info
+	function s(node) {		// show
+		info = g_to_text(node);
+		details.nodeValue = "Function: " + info;
+	}
+	function c() {			// clear
+		details.nodeValue = ' ';
+	}
+
+	// ctrl-F for search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+	})
+
+	// functions
+	function find_child(parent, name, attr) {
+		var children = parent.childNodes;
+		for (var i=0; i<children.length;i++) {
+			if (children[i].tagName == name)
+				return (attr != undefined) ? children[i].attributes[attr].value : children[i];
+		}
+		return;
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_"+attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_"+attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_"+attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		// if there's any manipulation we want to do to the function
+		// name before it's searched, do it here before returning.
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes["width"].value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes["x"].value = parseFloat(r.attributes["x"].value) +3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2*12*0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		// Fit in full text width
+		if (/^ *$/.test(txt) || t.getSubStringLength(0, txt.length) < w)
+			return;
+
+		for (var x=txt.length-2; x>0; x--) {
+			if (t.getSubStringLength(0, x+2) <= w) {
+				t.textContent = txt.substring(0,x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for(var i=0, c=e.childNodes; i<c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes["x"] != undefined) {
+				orig_save(e, "x");
+				e.attributes["x"].value = (parseFloat(e.attributes["x"].value) - x - 10) * ratio + 10;
+				if(e.tagName == "text") e.attributes["x"].value = find_child(e.parentNode, "rect", "x") + 3;
+			}
+			if (e.attributes["width"] != undefined) {
+				orig_save(e, "width");
+				e.attributes["width"].value = parseFloat(e.attributes["width"].value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for(var i=0, c=e.childNodes; i<c.length; i++) {
+			zoom_child(c[i], x-10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes["x"] != undefined) {
+				orig_save(e, "x");
+				e.attributes["x"].value = 10;
+			}
+			if (e.attributes["width"] != undefined) {
+				orig_save(e, "width");
+				e.attributes["width"].value = parseInt(svg.width.baseVal.value) - (10*2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for(var i=0, c=e.childNodes; i<c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr["width"].value);
+		var xmin = parseFloat(attr["x"].value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr["y"].value);
+		var ratio = (svg.width.baseVal.value - 2*10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		var unzoombtn = document.getElementById("unzoom");
+		unzoombtn.style["opacity"] = "1.0";
+
+		var el = document.getElementsByTagName("g");
+		for(var i=0;i<el.length;i++){
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a["x"].value);
+			var ew = parseFloat(a["width"].value);
+			// Is it an ancestor
+			if (0 == 0) {
+				var upstack = parseFloat(a["y"].value) > ymin;
+			} else {
+				var upstack = parseFloat(a["y"].value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.style["opacity"] = "0.5";
+					zoom_parent(e);
+					e.onclick = function(e){unzoom(); zoom(this);};
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.style["display"] = "none";
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.style["display"] = "none";
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					e.onclick = function(e){zoom(this);};
+					update_text(e);
+				}
+			}
+		}
+	}
+	function unzoom() {
+		var unzoombtn = document.getElementById("unzoom");
+		unzoombtn.style["opacity"] = "0.0";
+
+		var el = document.getElementsByTagName("g");
+		for(i=0;i<el.length;i++) {
+			el[i].style["display"] = "block";
+			el[i].style["opacity"] = "1";
+			zoom_reset(el[i]);
+			update_text(el[i]);
+		}
+	}
+
+	// search
+	function reset_search() {
+		var el = document.getElementsByTagName("rect");
+		for (var i=0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)", "");
+			if (term != null) {
+				search(term)
+			}
+		} else {
+			reset_search();
+			searching = 0;
+			searchbtn.style["opacity"] = "0.1";
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.style["opacity"] = "0.0";
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		var re = new RegExp(term);
+		var el = document.getElementsByTagName("g");
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			if (e.attributes["class"].value != "func_g")
+				continue;
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (rect == null) {
+				// the rect might be wrapped in an anchor
+				// if nameattr href is being used
+				if (rect = find_child(e, "a")) {
+				    rect = find_child(r, "rect");
+				}
+			}
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes["width"].value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes["x"].value);
+				orig_save(rect, "fill");
+				rect.attributes["fill"].value =
+				    "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+
+		searchbtn.style["opacity"] = "1.0";
+		searchbtn.firstChild.nodeValue = "Reset Search"
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+			return a - b;
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		var fudge = 0.0001;	// JavaScript floating point
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw - fudge) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.style["opacity"] = "1.0";
+		pct = 100 * count / maxwidth;
+		if (pct == 100)
+			pct = "100"
+		else
+			pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+	function searchover(e) {
+		searchbtn.style["opacity"] = "1.0";
+	}
+	function searchout(e) {
+		if (searching) {
+			searchbtn.style["opacity"] = "1.0";
+		} else {
+			searchbtn.style["opacity"] = "0.1";
+		}
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1200.0" height="2134.0" fill="url(#background)"  />
+<text text-anchor="middle" x="600.00" y="24" font-size="17" font-family="Verdana" fill="rgb(0,0,0)"  >Flame Graph</text>
+<text text-anchor="" x="10.00" y="2117" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="details" > </text>
+<text text-anchor="" x="10.00" y="24" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="unzoom" onclick="unzoom()" style="opacity:0.0;cursor:pointer" >Reset Zoom</text>
+<text text-anchor="" x="1090.00" y="24" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="search" onmouseover="searchover()" onmouseout="searchout()" onclick="search_prompt()" style="opacity:0.1;cursor:pointer" >Search</text>
+<text text-anchor="" x="1090.00" y="2117" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="matched" > </text>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="517" width="82.5" height="15.0" fill="rgb(249,99,44)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="527.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>rallocx (6 samples, 1.23%)</title><rect x="733.5" y="2037" width="14.6" height="15.0" fill="rgb(205,84,32)" rx="2" ry="2" />
+<text text-anchor="" x="736.54" y="2047.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="117" width="82.5" height="15.0" fill="rgb(224,124,1)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="127.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="229" width="82.5" height="15.0" fill="rgb(241,38,4)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="239.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1029" width="82.5" height="15.0" fill="rgb(248,78,20)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1039.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>&lt;handlebars::grammar::HandlebarsParser as pest::parser::Parser&lt;handlebars::grammar::Rule&gt;&gt;::parse::rules::identifier (1 samples, 0.21%)</title><rect x="177.5" y="2021" width="2.5" height="15.0" fill="rgb(253,135,39)" rx="2" ry="2" />
+<text text-anchor="" x="180.53" y="2031.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_dl_new_object (1 samples, 0.21%)</title><rect x="264.9" y="2021" width="2.5" height="15.0" fill="rgb(212,110,47)" rx="2" ry="2" />
+<text text-anchor="" x="267.94" y="2031.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1461" width="82.5" height="15.0" fill="rgb(206,43,48)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1471.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_dl_sysdep_start (1 samples, 0.21%)</title><rect x="988.5" y="2053" width="2.4" height="15.0" fill="rgb(248,38,2)" rx="2" ry="2" />
+<text text-anchor="" x="991.48" y="2063.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="789" width="82.5" height="15.0" fill="rgb(249,127,43)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="799.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="261" width="82.5" height="15.0" fill="rgb(223,228,40)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="271.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1077" width="82.5" height="15.0" fill="rgb(206,42,40)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1087.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__clone (20 samples, 4.12%)</title><rect x="845.2" y="2053" width="48.6" height="15.0" fill="rgb(223,27,41)" rx="2" ry="2" />
+<text text-anchor="" x="848.23" y="2063.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >__cl..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>all (486 samples, 100%)</title><rect x="10.0" y="2085" width="1180.0" height="15.0" fill="rgb(207,219,44)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="2095.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="645" width="82.5" height="15.0" fill="rgb(242,22,42)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="655.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="949" width="82.5" height="15.0" fill="rgb(239,5,30)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="959.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1429" width="82.5" height="15.0" fill="rgb(246,195,14)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1439.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="245" width="82.5" height="15.0" fill="rgb(250,117,46)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="255.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1893" width="82.5" height="15.0" fill="rgb(208,52,3)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1903.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>mallocx (19 samples, 3.91%)</title><rect x="1027.3" y="2053" width="46.2" height="15.0" fill="rgb(214,106,38)" rx="2" ry="2" />
+<text text-anchor="" x="1030.33" y="2063.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >mall..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__rde_alloc (4 samples, 0.82%)</title><rect x="964.2" y="2053" width="9.7" height="15.0" fill="rgb(224,96,2)" rx="2" ry="2" />
+<text text-anchor="" x="967.20" y="2063.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="997" width="82.5" height="15.0" fill="rgb(219,130,41)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1007.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="549" width="82.5" height="15.0" fill="rgb(216,56,46)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="559.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1253" width="82.5" height="15.0" fill="rgb(206,105,32)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1263.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1957" width="82.5" height="15.0" fill="rgb(219,69,36)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1967.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>isfree (16 samples, 3.29%)</title><rect x="393.6" y="2037" width="38.9" height="15.0" fill="rgb(210,15,43)" rx="2" ry="2" />
+<text text-anchor="" x="396.62" y="2047.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >isf..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1301" width="82.5" height="15.0" fill="rgb(244,83,50)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1311.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="821" width="82.5" height="15.0" fill="rgb(248,176,45)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="831.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>check_match (1 samples, 0.21%)</title><rect x="267.4" y="2021" width="2.4" height="15.0" fill="rgb(218,163,42)" rx="2" ry="2" />
+<text text-anchor="" x="270.37" y="2031.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="341" width="82.5" height="15.0" fill="rgb(254,223,19)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="351.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__rde_dealloc (14 samples, 2.88%)</title><rect x="352.3" y="2037" width="34.0" height="15.0" fill="rgb(223,171,45)" rx="2" ry="2" />
+<text text-anchor="" x="355.35" y="2047.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >__..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__libc_pthread_init (1 samples, 0.21%)</title><rect x="262.5" y="2005" width="2.4" height="15.0" fill="rgb(227,162,33)" rx="2" ry="2" />
+<text text-anchor="" x="265.51" y="2015.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="597" width="82.5" height="15.0" fill="rgb(234,147,30)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="607.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__memmove_sse2_unaligned_erms (27 samples, 5.56%)</title><rect x="898.6" y="2053" width="65.6" height="15.0" fill="rgb(252,71,43)" rx="2" ry="2" />
+<text text-anchor="" x="901.64" y="2063.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >__memmo..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1733" width="82.5" height="15.0" fill="rgb(231,225,51)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1743.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1125" width="82.5" height="15.0" fill="rgb(214,34,27)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1135.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="469" width="82.5" height="15.0" fill="rgb(232,4,8)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="479.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1589" width="82.5" height="15.0" fill="rgb(250,38,3)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1599.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1973" width="82.5" height="15.0" fill="rgb(213,205,44)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1983.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="661" width="82.5" height="15.0" fill="rgb(232,197,50)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="671.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1349" width="82.5" height="15.0" fill="rgb(234,16,10)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1359.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="869" width="82.5" height="15.0" fill="rgb(250,200,16)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="879.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="501" width="82.5" height="15.0" fill="rgb(226,58,10)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="511.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__rde_alloc (9 samples, 1.85%)</title><rect x="330.5" y="2037" width="21.8" height="15.0" fill="rgb(249,229,38)" rx="2" ry="2" />
+<text text-anchor="" x="333.49" y="2047.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__GI___libc_sigaction (4 samples, 0.82%)</title><rect x="884.1" y="2037" width="9.7" height="15.0" fill="rgb(223,208,0)" rx="2" ry="2" />
+<text text-anchor="" x="887.07" y="2047.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>&lt;core::iter::Filter&lt;I, P&gt; as core::iter::iterator::Iterator&gt;::next (1 samples, 0.21%)</title><rect x="10.0" y="2053" width="2.4" height="15.0" fill="rgb(253,43,28)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="2063.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="181" width="82.5" height="15.0" fill="rgb(220,189,42)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="191.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="757" width="82.5" height="15.0" fill="rgb(217,200,49)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="767.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>pest::position::Position::line_col (63 samples, 12.96%)</title><rect x="580.6" y="2037" width="152.9" height="15.0" fill="rgb(250,136,28)" rx="2" ry="2" />
+<text text-anchor="" x="583.58" y="2047.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >pest::position::Pos..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1861" width="82.5" height="15.0" fill="rgb(231,221,34)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1871.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1813" width="82.5" height="15.0" fill="rgb(207,10,40)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1823.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1477" width="82.5" height="15.0" fill="rgb(224,95,36)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1487.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1109" width="82.5" height="15.0" fill="rgb(250,5,47)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1119.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_start (8 samples, 1.65%)</title><rect x="990.9" y="2053" width="19.4" height="15.0" fill="rgb(221,112,46)" rx="2" ry="2" />
+<text text-anchor="" x="993.91" y="2063.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1397" width="82.5" height="15.0" fill="rgb(209,176,53)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1407.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="917" width="82.5" height="15.0" fill="rgb(250,154,13)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="927.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_$LT$handlebars..grammar..HandlebarsParser$u20$as$u20$pest..parser..Parser$LT$handlebars..grammar..Rule$GT$$GT$::parse::rules::raw_text::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::hdd8dbb3fb05f6375 (2 samples, 0.41%)</title><rect x="301.4" y="2037" width="4.8" height="15.0" fill="rgb(243,68,5)" rx="2" ry="2" />
+<text text-anchor="" x="304.36" y="2047.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__rust_alloc (3 samples, 0.62%)</title><rect x="973.9" y="2053" width="7.3" height="15.0" fill="rgb(210,219,35)" rx="2" ry="2" />
+<text text-anchor="" x="976.91" y="2063.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="709" width="82.5" height="15.0" fill="rgb(216,53,20)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="719.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1605" width="82.5" height="15.0" fill="rgb(227,82,2)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1615.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1941" width="82.5" height="15.0" fill="rgb(205,167,34)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1951.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1845" width="82.5" height="15.0" fill="rgb(254,167,44)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1855.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="309" width="82.5" height="15.0" fill="rgb(224,205,14)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="319.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="981" width="82.5" height="15.0" fill="rgb(237,77,52)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="991.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1653" width="82.5" height="15.0" fill="rgb(236,142,54)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1663.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="389" width="82.5" height="15.0" fill="rgb(231,56,22)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="399.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1205" width="82.5" height="15.0" fill="rgb(238,203,23)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1215.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="165" width="82.5" height="15.0" fill="rgb(226,53,3)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="175.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1701" width="82.5" height="15.0" fill="rgb(254,155,42)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1711.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="837" width="82.5" height="15.0" fill="rgb(246,117,12)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="847.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1317" width="82.5" height="15.0" fill="rgb(212,84,51)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1327.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="133" width="82.5" height="15.0" fill="rgb(215,218,0)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="143.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="805" width="82.5" height="15.0" fill="rgb(208,23,31)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="815.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1509" width="82.5" height="15.0" fill="rgb(218,7,53)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1519.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__GI___close_nocancel (1 samples, 0.21%)</title><rect x="983.6" y="2037" width="2.4" height="15.0" fill="rgb(227,174,41)" rx="2" ry="2" />
+<text text-anchor="" x="986.62" y="2047.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="53" width="82.5" height="15.0" fill="rgb(242,131,27)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="63.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1221" width="82.5" height="15.0" fill="rgb(234,57,21)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1231.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1445" width="82.5" height="15.0" fill="rgb(229,57,8)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1455.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="965" width="82.5" height="15.0" fill="rgb(219,79,13)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="975.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="629" width="82.5" height="15.0" fill="rgb(220,70,43)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="639.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>my_benchmark-bc (486 samples, 100.00%)</title><rect x="10.0" y="2069" width="1180.0" height="15.0" fill="rgb(212,72,11)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="2079.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >my_benchmark-bc</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1685" width="82.5" height="15.0" fill="rgb(221,176,0)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1695.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1173" width="82.5" height="15.0" fill="rgb(235,208,10)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1183.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="421" width="82.5" height="15.0" fill="rgb(252,79,24)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="431.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1989" width="82.5" height="15.0" fill="rgb(205,84,20)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1999.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1557" width="82.5" height="15.0" fill="rgb(208,109,42)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1567.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__libc_write (1 samples, 0.21%)</title><rect x="306.2" y="2037" width="2.4" height="15.0" fill="rgb(215,91,14)" rx="2" ry="2" />
+<text text-anchor="" x="309.21" y="2047.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>isfree (4 samples, 0.82%)</title><rect x="1010.3" y="2053" width="9.7" height="15.0" fill="rgb(249,228,34)" rx="2" ry="2" />
+<text text-anchor="" x="1013.33" y="2063.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="677" width="82.5" height="15.0" fill="rgb(210,11,5)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="687.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="405" width="82.5" height="15.0" fill="rgb(223,18,4)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="415.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="693" width="82.5" height="15.0" fill="rgb(243,228,51)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="703.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>isfree (13 samples, 2.67%)</title><rect x="269.8" y="2021" width="31.6" height="15.0" fill="rgb(243,21,10)" rx="2" ry="2" />
+<text text-anchor="" x="272.79" y="2031.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >is..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1877" width="82.5" height="15.0" fill="rgb(246,176,52)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1887.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="741" width="82.5" height="15.0" fill="rgb(222,1,13)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="751.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_dl_relocate_object (1 samples, 0.21%)</title><rect x="391.2" y="2005" width="2.4" height="15.0" fill="rgb(222,204,30)" rx="2" ry="2" />
+<text text-anchor="" x="394.19" y="2015.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__rust_dealloc (1 samples, 0.21%)</title><rect x="386.3" y="2037" width="2.5" height="15.0" fill="rgb(208,188,19)" rx="2" ry="2" />
+<text text-anchor="" x="389.34" y="2047.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="149" width="82.5" height="15.0" fill="rgb(252,169,32)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="159.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1765" width="82.5" height="15.0" fill="rgb(206,92,28)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1775.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1365" width="82.5" height="15.0" fill="rgb(238,43,2)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1375.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="885" width="82.5" height="15.0" fill="rgb(228,156,43)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="895.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>dl_main (2 samples, 0.41%)</title><rect x="388.8" y="2021" width="4.8" height="15.0" fill="rgb(215,207,50)" rx="2" ry="2" />
+<text text-anchor="" x="391.77" y="2031.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1093" width="82.5" height="15.0" fill="rgb(223,95,53)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1103.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>je_arena_ralloc (2 samples, 0.41%)</title><rect x="1020.0" y="2053" width="4.9" height="15.0" fill="rgb(246,152,51)" rx="2" ry="2" />
+<text text-anchor="" x="1023.04" y="2063.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1157" width="82.5" height="15.0" fill="rgb(240,75,7)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1167.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (341 samples, 70.16%)</title><rect x="17.3" y="2053" width="827.9" height="15.0" fill="rgb(222,154,38)" rx="2" ry="2" />
+<text text-anchor="" x="20.28" y="2063.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="725" width="82.5" height="15.0" fill="rgb(252,138,26)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="735.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>sdallocx (40 samples, 8.23%)</title><rect x="748.1" y="2037" width="97.1" height="15.0" fill="rgb(205,49,7)" rx="2" ry="2" />
+<text text-anchor="" x="751.11" y="2047.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >sdallocx</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__madvise (2 samples, 0.41%)</title><rect x="893.8" y="2053" width="4.8" height="15.0" fill="rgb(213,194,52)" rx="2" ry="2" />
+<text text-anchor="" x="896.79" y="2063.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1829" width="82.5" height="15.0" fill="rgb(205,124,11)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1839.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_dl_sysdep_start (2 samples, 0.41%)</title><rect x="388.8" y="2037" width="4.8" height="15.0" fill="rgb(221,138,37)" rx="2" ry="2" />
+<text text-anchor="" x="391.77" y="2047.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>&lt;handlebars::grammar::HandlebarsParser as pest::parser::Parser&lt;handlebars::grammar::Rule&gt;&gt;::parse::rules::escape (6 samples, 1.23%)</title><rect x="163.0" y="2037" width="14.5" height="15.0" fill="rgb(216,46,18)" rx="2" ry="2" />
+<text text-anchor="" x="165.96" y="2047.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1333" width="82.5" height="15.0" fill="rgb(251,99,48)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1343.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="853" width="82.5" height="15.0" fill="rgb(208,1,28)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="863.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1285" width="82.5" height="15.0" fill="rgb(231,146,31)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1295.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="901" width="82.5" height="15.0" fill="rgb(223,76,44)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="911.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1381" width="82.5" height="15.0" fill="rgb(227,214,49)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1391.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>rallocx (5 samples, 1.03%)</title><rect x="1177.9" y="2053" width="12.1" height="15.0" fill="rgb(250,172,8)" rx="2" ry="2" />
+<text text-anchor="" x="1180.86" y="2063.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1637" width="82.5" height="15.0" fill="rgb(211,149,43)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1647.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>je_arena_ralloc_no_move (5 samples, 1.03%)</title><rect x="459.2" y="2037" width="12.1" height="15.0" fill="rgb(251,67,5)" rx="2" ry="2" />
+<text text-anchor="" x="462.18" y="2047.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>&lt;core::iter::Map&lt;I, F&gt; as core::iter::iterator::Iterator&gt;::fold (44 samples, 9.05%)</title><rect x="56.1" y="2037" width="106.9" height="15.0" fill="rgb(252,165,3)" rx="2" ry="2" />
+<text text-anchor="" x="59.13" y="2047.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >&lt;core::iter::..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>my_benchmark::next_state (12 samples, 2.47%)</title><rect x="551.4" y="2037" width="29.2" height="15.0" fill="rgb(244,144,27)" rx="2" ry="2" />
+<text text-anchor="" x="554.44" y="2047.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >my..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1525" width="82.5" height="15.0" fill="rgb(242,122,34)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1535.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>&lt;alloc::vec::Vec&lt;T&gt; as alloc::vec::SpecExtend&lt;T, I&gt;&gt;::from_iter (16 samples, 3.29%)</title><rect x="17.3" y="2037" width="38.8" height="15.0" fill="rgb(246,170,34)" rx="2" ry="2" />
+<text text-anchor="" x="20.28" y="2047.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >&lt;al..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1925" width="82.5" height="15.0" fill="rgb(207,58,39)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1935.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (51 samples, 10.49%)</title><rect x="177.5" y="2037" width="123.9" height="15.0" fill="rgb(214,49,3)" rx="2" ry="2" />
+<text text-anchor="" x="180.53" y="2047.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1189" width="82.5" height="15.0" fill="rgb(214,102,53)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1199.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="613" width="82.5" height="15.0" fill="rgb(236,218,43)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="623.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (35 samples, 7.20%)</title><rect x="180.0" y="2021" width="84.9" height="15.0" fill="rgb(232,165,48)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="2031.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1717" width="82.5" height="15.0" fill="rgb(236,154,2)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1727.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__memmove_sse2_unaligned_erms (9 samples, 1.85%)</title><rect x="308.6" y="2037" width="21.9" height="15.0" fill="rgb(238,182,41)" rx="2" ry="2" />
+<text text-anchor="" x="311.64" y="2047.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>mallocx (33 samples, 6.79%)</title><rect x="471.3" y="2037" width="80.1" height="15.0" fill="rgb(234,221,16)" rx="2" ry="2" />
+<text text-anchor="" x="474.32" y="2047.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >mallocx</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1797" width="82.5" height="15.0" fill="rgb(242,131,29)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1807.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1493" width="82.5" height="15.0" fill="rgb(223,223,48)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1503.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1541" width="82.5" height="15.0" fill="rgb(233,63,18)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1551.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>mallocx (34 samples, 7.00%)</title><rect x="180.0" y="37" width="82.5" height="15.0" fill="rgb(250,29,49)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="47.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >mallocx</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="213" width="82.5" height="15.0" fill="rgb(239,205,51)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="223.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>&lt;pest::parser_state::ParserState&lt;i, R&gt;&gt;::track (2 samples, 0.41%)</title><rect x="12.4" y="2053" width="4.9" height="15.0" fill="rgb(216,30,34)" rx="2" ry="2" />
+<text text-anchor="" x="15.43" y="2063.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1669" width="82.5" height="15.0" fill="rgb(244,202,2)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1679.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="325" width="82.5" height="15.0" fill="rgb(241,100,44)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="335.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="197" width="82.5" height="15.0" fill="rgb(215,180,16)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="207.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="293" width="82.5" height="15.0" fill="rgb(221,63,51)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="303.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1237" width="82.5" height="15.0" fill="rgb(215,19,51)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1247.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="437" width="82.5" height="15.0" fill="rgb(249,117,16)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="447.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1909" width="82.5" height="15.0" fill="rgb(235,95,32)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1919.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="85" width="82.5" height="15.0" fill="rgb(219,24,14)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="95.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_dl_start_user (1 samples, 0.21%)</title><rect x="986.0" y="2053" width="2.5" height="15.0" fill="rgb(217,95,42)" rx="2" ry="2" />
+<text text-anchor="" x="989.05" y="2063.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__rust_realloc (1 samples, 0.21%)</title><rect x="981.2" y="2053" width="2.4" height="15.0" fill="rgb(232,132,28)" rx="2" ry="2" />
+<text text-anchor="" x="984.19" y="2063.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>my_benchmark::next_state (36 samples, 7.41%)</title><rect x="1090.5" y="2053" width="87.4" height="15.0" fill="rgb(207,139,46)" rx="2" ry="2" />
+<text text-anchor="" x="1093.45" y="2063.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >my_benchma..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>my_benchmark::main (7 samples, 1.44%)</title><rect x="1073.5" y="2053" width="17.0" height="15.0" fill="rgb(220,204,17)" rx="2" ry="2" />
+<text text-anchor="" x="1076.46" y="2063.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="101" width="82.5" height="15.0" fill="rgb(208,211,16)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="111.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1141" width="82.5" height="15.0" fill="rgb(246,51,14)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1151.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1413" width="82.5" height="15.0" fill="rgb(231,203,49)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1423.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="933" width="82.5" height="15.0" fill="rgb(212,79,26)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="943.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1045" width="82.5" height="15.0" fill="rgb(206,97,48)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1055.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_dl_map_object (1 samples, 0.21%)</title><rect x="983.6" y="2053" width="2.4" height="15.0" fill="rgb(254,29,23)" rx="2" ry="2" />
+<text text-anchor="" x="986.62" y="2063.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="373" width="82.5" height="15.0" fill="rgb(238,130,35)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="383.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="2005" width="82.5" height="15.0" fill="rgb(221,52,32)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="2015.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="773" width="82.5" height="15.0" fill="rgb(209,183,42)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="783.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="277" width="82.5" height="15.0" fill="rgb(225,27,43)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="287.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="453" width="82.5" height="15.0" fill="rgb(249,67,52)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="463.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="485" width="82.5" height="15.0" fill="rgb(250,53,39)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="495.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1061" width="82.5" height="15.0" fill="rgb(242,46,12)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1071.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="69" width="82.5" height="15.0" fill="rgb(243,155,16)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="79.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="357" width="82.5" height="15.0" fill="rgb(223,164,11)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="367.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1013" width="82.5" height="15.0" fill="rgb(247,162,30)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1023.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1621" width="82.5" height="15.0" fill="rgb(233,73,20)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1631.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>je_arena_ralloc (11 samples, 2.26%)</title><rect x="432.5" y="2037" width="26.7" height="15.0" fill="rgb(211,186,3)" rx="2" ry="2" />
+<text text-anchor="" x="435.47" y="2047.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >j..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1573" width="82.5" height="15.0" fill="rgb(248,51,9)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1583.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>je_rtree_set (1 samples, 0.21%)</title><rect x="1024.9" y="2053" width="2.4" height="15.0" fill="rgb(227,213,44)" rx="2" ry="2" />
+<text text-anchor="" x="1027.90" y="2063.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="565" width="82.5" height="15.0" fill="rgb(240,29,5)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="575.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1749" width="82.5" height="15.0" fill="rgb(238,126,43)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1759.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1781" width="82.5" height="15.0" fill="rgb(215,188,18)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1791.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_dl_start (1 samples, 0.21%)</title><rect x="986.0" y="2037" width="2.5" height="15.0" fill="rgb(243,66,37)" rx="2" ry="2" />
+<text text-anchor="" x="989.05" y="2047.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="1269" width="82.5" height="15.0" fill="rgb(209,25,43)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="1279.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="581" width="82.5" height="15.0" fill="rgb(223,58,52)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="591.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>[unknown] (34 samples, 7.00%)</title><rect x="180.0" y="533" width="82.5" height="15.0" fill="rgb(217,13,23)" rx="2" ry="2" />
+<text text-anchor="" x="182.96" y="543.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >[unknown]</text>
+</g>
+</svg>
