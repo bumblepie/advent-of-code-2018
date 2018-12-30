@@ -113,11 +113,11 @@ fn output(op: &Op, input_state: &Vec<usize>, op_args: &Vec<usize>) -> Vec<usize>
         Op::Setr => output_state[op_args[2]] = input_state[op_args[0]],
         Op::Seti => output_state[op_args[2]] = op_args[0],
         Op::Gtir => output_state[op_args[2]] = if op_args[0] > input_state[op_args[1]] { 1 } else { 0 },
-        Op::Gtri => output_state[op_args[2]] = if input_state[op_args[0]] > input_state[op_args[1]] { 1 } else { 0 },
-        Op::Gtrr => output_state[op_args[2]] = if input_state[op_args[0]] > op_args[1] { 1 } else { 0 },
+        Op::Gtri => output_state[op_args[2]] = if input_state[op_args[0]] > op_args[1] { 1 } else { 0 },
+        Op::Gtrr => output_state[op_args[2]] = if input_state[op_args[0]] > input_state[op_args[1]] { 1 } else { 0 },
         Op::Eqir => output_state[op_args[2]] = if op_args[0] == input_state[op_args[1]] { 1 } else { 0 },
-        Op::Eqri => output_state[op_args[2]] = if input_state[op_args[0]] == input_state[op_args[1]] { 1 } else { 0 },
-        Op::Eqrr => output_state[op_args[2]] = if input_state[op_args[0]] == op_args[1] { 1 } else { 0 },
+        Op::Eqri => output_state[op_args[2]] = if input_state[op_args[0]] == op_args[1] { 1 } else { 0 },
+        Op::Eqrr => output_state[op_args[2]] = if input_state[op_args[0]] == input_state[op_args[1]] { 1 } else { 0 },
     }
     output_state
 }
