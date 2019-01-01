@@ -1,0 +1,25 @@
+[0, 10551309, 7, 10551309, 1, 1]
+
+X = 10551309
+COUNT = 0
+N = 1
+Z = 1
+loop {
+  Y = 1
+  loop {
+    Y = N * Z
+    if Y == X {
+      COUNT += Z
+    }
+    N += 1
+    if N > X {
+      break
+    }
+  }
+  Z += 1
+  if Z > COUNT {
+    break
+  }
+}
+
+ie sum all factors of X
