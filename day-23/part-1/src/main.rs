@@ -41,7 +41,7 @@ fn main() {
         "{}",
         nanobots
             .iter()
-            .filter(|nanobot| nanobot.distance_to(biggest_nanobot) <= biggest_nanobot.radius)
+            .filter(|nanobot| distance_to(&nanobot.position, &biggest_nanobot.position) <= biggest_nanobot.radius)
             .count()
     )
 }
@@ -52,13 +52,10 @@ struct Nanobot {
     radius: i32,
 }
 
-impl Nanobot {
-    fn distance_to(&self, other: &Nanobot) -> i32 {
-        let x = i32::abs(self.position.0 - other.position.0);
-        let y = i32::abs(self.position.1 - other.position.1);
-        let z = i32::abs(self.position.2 - other.position.2);
-        x + y + z
-    }
+fn distance_to(pos: &(i32, i32, i32), other: &(i32, i32, i32)) -> i32 {
+    i32::abs(pos.0 - other.0)
+    + i32::abs(pos.1 - other.1)
+    + i32::abs(pos.2 - other.2)
 }
 
 fn read_nanobot_from_line(line: String) -> Result<Nanobot, String> {
